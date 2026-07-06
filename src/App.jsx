@@ -1,19 +1,15 @@
 import { useState, useEffect } from 'react';
-// Import the local knowledge base we created in Phase 2
 import { PHARMACY_KNOWLEDGE_BASE } from './pharmacyData';
-// FIXED: Using the exact official exported function name from @mlc-ai/web-llm
+// FIXED: Using the exact official exported factory function name
 import { CreateMLCEngine } from '@mlc-ai/web-llm';
 
 export default function App() {
   // --- STATE MANAGEMENT ---
-  
-  // Inventory State (Loads from LocalStorage, defaults to empty array)
   const [inventory, setInventory] = useState(() => {
     const saved = localStorage.getItem('pharmacy_inventory');
     return saved ? JSON.parse(saved) : [];
   });
 
-  // Search & UI States
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [newItemName, setNewItemName] = useState('');
@@ -26,27 +22,23 @@ export default function App() {
   const [engine, setEngine] = useState(null);
 
   // --- EFFECTS ---
-
-  // Automatically save to LocalStorage whenever the 'inventory' array changes
   useEffect(() => {
     localStorage.setItem('pharmacy_inventory', JSON.stringify(inventory));
   }, [inventory]);
 
   // --- HANDLERS & LOGIC ---
-
-  // Direct WebGPU Engine Initialization (No complex background worker files)
   const initAI = async () => {
     setAiStatus('Initializing WebGPU & Loading Model Slices...');
     try {
-      // Using a highly optimized, lightweight 1B parameter model perfect for browser execution
+      // Using a lightweight, fast 1B model optimized for web browsers
       const selectedModel = "Llama-3-8B-Instruct-q4f16_1-MLC"; 
       
       const replyProgressCallback = (report) => {
-        console.log(report.text); // Prints compilation percentages directly to your browser console
+        console.log(report.text);
         setAiStatus(report.text);
       };
 
-      // FIXED: Invoking the exact, validated factory function
+      // FIXED: Invoking the correct uppercase method
       const aiEngine = await CreateMLCEngine(selectedModel, {
         initProgressCallback: replyProgressCallback,
       });
@@ -59,7 +51,6 @@ export default function App() {
     }
   };
 
-  // Submit prompt to the local AI engine
   const handleAiChat = async (e) => {
     e.preventDefault();
     if (!engine || !aiPrompt) return;
@@ -76,7 +67,6 @@ export default function App() {
     }
   };
 
-  // Search the $0.00 deterministic database layer
   const handleSearch = (e) => {
     const query = e.target.value;
     setSearchQuery(query);
@@ -93,7 +83,6 @@ export default function App() {
     setSearchResults(filtered);
   };
 
-  // Add an item to the LocalStorage inventory list
   const handleAddInventory = (e) => {
     e.preventDefault();
     if (!newItemName || !newItemStock) return;
@@ -109,7 +98,6 @@ export default function App() {
     setNewItemStock('');
   };
 
-  // Remove an item from the LocalStorage inventory list
   const handleRemoveInventory = (id) => {
     setInventory(inventory.filter((item) => item.id !== id));
   };
