@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'react';
 import { PHARMACY_KNOWLEDGE_BASE } from './pharmacyData';
-
-// BYPASS BUNDLER: Import directly from the web distribution network to prevent Vercel build crashes
-import { createEngine } from 'https://esm.sh/@mlc-ai/web-llm';
+// Standard local import—now using the correct lowercase 'createEngine'
+import { createEngine } from '@mlc-ai/web-llm';
 
 export default function App() {
   // --- STATE MANAGEMENT ---
@@ -69,13 +68,15 @@ export default function App() {
   const handleSearch = (e) => {
     const query = e.target.value;
     setSearchQuery(query);
+
     if (query.trim() === '') {
       setSearchResults([]);
       return;
     }
+
     const filtered = PHARMACY_KNOWLEDGE_BASE.filter((med) =>
       med.generic_name.toLowerCase().includes(query.toLowerCase()) ||
-      med.brand_names.some(brand => brand.toLowerCase().includes(query.toLowerCase()))
+      med.brand_names?.some(brand => brand.toLowerCase().includes(query.toLowerCase()))
     );
     setSearchResults(filtered);
   };
@@ -83,7 +84,14 @@ export default function App() {
   const handleAddInventory = (e) => {
     e.preventDefault();
     if (!newItemName || !newItemStock) return;
-    setInventory([...inventory, { id: Date.now(), name: newItemName, stock: parseInt(newItemStock, 10) }]);
+
+    const newItem = {
+      id: Date.now(),
+      name: newItemName,
+      stock: parseInt(newItemStock, 10),
+    };
+
+    setInventory([...inventory, newItem]);
     setNewItemName('');
     setNewItemStock('');
   };
@@ -92,6 +100,7 @@ export default function App() {
     setInventory(inventory.filter((item) => item.id !== id));
   };
 
+  // --- RENDER UI ---
   return (
     <div style={{ fontFamily: 'sans-serif', maxWidth: '800px', margin: '0 auto', padding: '20px' }}>
       <h1>Zero-Cost Pharmacy Workspace</h1>
@@ -143,14 +152,17 @@ export default function App() {
           onChange={handleSearch}
           style={{ width: '100%', padding: '10px', fontSize: '16px', borderRadius: '4px', border: '1px solid #ccc' }}
         />
+
         {searchResults.length > 0 && (
           <div style={{ marginTop: '15px', background: '#f9f9f9', padding: '15px', borderRadius: '6px', border: '1px solid #ddd' }}>
             {searchResults.map((med, index) => (
-              <div key={index} style={{ marginBottom: '15px' }}>
-                <h3 style={{ margin: '0 0 5px 0', color: '#0056b3' }}>{med.generic_name}</h3>
+              <div key={index} style={{ marginBottom: '15px', paddingBottom: '15px', borderBottom: index !== searchResults.length - 1 ? '1px solid #eee' : 'none' }}>
+                <h3 style={{ margin: '0 0 5px 0', color: '#0056b3' }}>{med.generic_name} ({med.brand_names?.join(', ')})</h3>
                 <p><strong>Category:</strong> {med.category}</p>
-                <span style={{ display: 'block', background: '#fff0f0', color: '#c00', padding: '8px', borderRadius: '4px', fontSize: '14px' }}>
-                  ⚠️ Warning: {med.black_box_warning}
+                <p><strong>Standard Dosage:</strong> {med.standard_dosage}</p>
+                <p><strong>Major Interactions:</strong> {med.major_interactions?.join(', ')}</p>
+                <span style={{ display: 'block', background: '#fff0f0', color: '#c00', padding: '8px', borderRadius: '4px', fontSize: '14px', fontWeight: 'bold' }}>
+                  ⚠️ Black Box Warning: {med.black_box_warning}
                 </span>
               </div>
             ))}
@@ -161,6 +173,7 @@ export default function App() {
       {/* SECTION 3: LOCAL INVENTORY */}
       <section>
         <h2>📦 Local Inventory Management ($0.00 Database)</h2>
+        
         <form onSubmit={handleAddInventory} style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
           <input
             type="text"
@@ -180,7 +193,10 @@ export default function App() {
             Add Item
           </button>
         </form>
-        {inventory.length > 0 && (
+
+        {inventory.length === 0 ? (
+          <p style={{ color: '#888', fontStyle: 'italic' }}>No items currently in stock.</p>
+        ) : (
           <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
             <thead>
               <tr style={{ borderBottom: '2px solid #ddd' }}>
@@ -195,7 +211,10 @@ export default function App() {
                   <td style={{ padding: '10px' }}>{item.name}</td>
                   <td style={{ padding: '10px' }}>{item.stock} units</td>
                   <td style={{ padding: '10px' }}>
-                    <button onClick={() => handleRemoveInventory(item.id)} style={{ padding: '4px 8px', background: '#dc3545', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}>
+                    <button 
+                      onClick={() => handleRemoveInventory(item.id)}
+                      style={{ padding: '4px 8px', background: '#dc3545', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}
+                    >
                       Delete
                     </button>
                   </td>
