@@ -36,8 +36,7 @@ export default function App() {
   const initAI = async () => {
     setAiStatus('Initializing WebGPU & Loading Model Slices...');
     try {
-      // CORRECTED: Explicitly targeting Llama 3.2 1B variant to prevent ModelNotFoundError
-      // This ultra-lean configuration bypasses VRAM constraints safely.
+      // Ultra-lean configuration bypasses VRAM constraints safely.
       const selectedModel = "Llama-3.2-1B-Instruct-q4f16_1-MLC"; 
       
       const replyProgressCallback = (report) => {
@@ -115,14 +114,16 @@ export default function App() {
   // --- COMPONENT INTERFACE ---
   return (
     <div style={{ fontFamily: 'sans-serif', maxWidth: '800px', margin: '0 auto', padding: '20px' }}>
-      <h1>Zero-Cost Pharmacy Workspace</h1>
+      {/* UPDATED: Renamed Main Title */}
+      <h1>Pharmacy Workshop</h1>
       <p style={{ color: '#666' }}>Powered by local data layers & browser storage.</p>
       
       <hr style={{ margin: '20px 0' }} />
 
       {/* SECTION 1: IN-BROWSER AI PORTAL */}
       <section style={{ marginBottom: '40px', background: '#f4f4f9', padding: '20px', borderRadius: '8px', border: '1px solid #ddd' }}>
-        <h2>🤖 Local AI Assistant ($0.00 Server Costs)</h2>
+        {/* UPDATED: Renamed Section Title */}
+        <h2>🤖 Your Local AI Assistant</h2>
         <p><strong>Status:</strong> <span style={{ color: '#0056b3' }}>{aiStatus}</span></p>
         
         {aiStatus === 'Not Initialized' && (
