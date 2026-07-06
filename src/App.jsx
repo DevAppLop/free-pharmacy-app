@@ -1,44 +1,51 @@
 import { useState, useEffect } from 'react';
+// Import deterministic data layers built in previous steps
 import { PHARMACY_KNOWLEDGE_BASE } from './pharmacyData';
-// Official factory function from @mlc-ai/web-llm
+// Official verified module factory function from @mlc-ai/web-llm
 import { CreateMLCEngine } from '@mlc-ai/web-llm';
 
 export default function App() {
   // --- STATE MANAGEMENT ---
+  
+  // Local Storage layer for application persistence
   const [inventory, setInventory] = useState(() => {
     const saved = localStorage.getItem('pharmacy_inventory');
     return saved ? JSON.parse(saved) : [];
   });
 
+  // UI state hooks
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [newItemName, setNewItemName] = useState('');
   const [newItemStock, setNewItemStock] = useState('');
 
-  // Local AI Module States
+  // Local browser engine parameters
   const [aiStatus, setAiStatus] = useState('Not Initialized');
   const [aiPrompt, setAiPrompt] = useState('');
   const [aiResponse, setAiResponse] = useState('');
   const [engine, setEngine] = useState(null);
 
-  // --- EFFECTS ---
+  // --- PERSISTENCE LAYER EFFECT ---
   useEffect(() => {
     localStorage.setItem('pharmacy_inventory', JSON.stringify(inventory));
   }, [inventory]);
 
-  // --- HANDLERS & LOGIC ---
+  // --- RUNTIME LOGIC & EVENT HANDLERS ---
+
+  // Initialize WebGPU compilation pipeline
   const initAI = async () => {
     setAiStatus('Initializing WebGPU & Loading Model Slices...');
     try {
-      // SWAPPED: Downgrading from 8B to the highly efficient 1B parameter variant 
-      // This solves the DXGI_ERROR_DEVICE_HUNG memory limits on your GPU core.
-      const selectedModel = "Llama-3-1B-Instruct-q4f16_1-MLC"; 
+      // CORRECTED: Explicitly targeting Llama 3.2 1B variant to prevent ModelNotFoundError
+      // This ultra-lean configuration bypasses VRAM constraints safely.
+      const selectedModel = "Llama-3.2-1B-Instruct-q4f16_1-MLC"; 
       
       const replyProgressCallback = (report) => {
         console.log(report.text);
         setAiStatus(report.text);
       };
 
+      // Spawning browser execution context 
       const aiEngine = await CreateMLCEngine(selectedModel, {
         initProgressCallback: replyProgressCallback,
       });
@@ -47,10 +54,11 @@ export default function App() {
       setAiStatus('Model Ready!');
     } catch (error) {
       console.error(error);
-      setAiStatus('Initialization failed. Make sure your browser supports WebGPU.');
+      setAiStatus('Initialization failed. Verify WebGPU compatibility in your browser flags.');
     }
   };
 
+  // Dispatch prompt requests straight to your machine's WebGPU core
   const handleAiChat = async (e) => {
     e.preventDefault();
     if (!engine || !aiPrompt) return;
@@ -63,10 +71,11 @@ export default function App() {
       setAiResponse(reply.choices[0].message.content);
     } catch (error) {
       console.error(error);
-      setAiResponse('Error executing local inference.');
+      setAiResponse('Error executing local inference. Refresh your window to reset WebGPU.');
     }
   };
 
+  // Deterministic local data query lookup
   const handleSearch = (e) => {
     const query = e.target.value;
     setSearchQuery(query);
@@ -83,6 +92,7 @@ export default function App() {
     setSearchResults(filtered);
   };
 
+  // Inventory record operations
   const handleAddInventory = (e) => {
     e.preventDefault();
     if (!newItemName || !newItemStock) return;
@@ -102,7 +112,7 @@ export default function App() {
     setInventory(inventory.filter((item) => item.id !== id));
   };
 
-  // --- RENDER UI ---
+  // --- COMPONENT INTERFACE ---
   return (
     <div style={{ fontFamily: 'sans-serif', maxWidth: '800px', margin: '0 auto', padding: '20px' }}>
       <h1>Zero-Cost Pharmacy Workspace</h1>
@@ -110,7 +120,7 @@ export default function App() {
       
       <hr style={{ margin: '20px 0' }} />
 
-      {/* SECTION 1: LOCAL AI ENGINE */}
+      {/* SECTION 1: IN-BROWSER AI PORTAL */}
       <section style={{ marginBottom: '40px', background: '#f4f4f9', padding: '20px', borderRadius: '8px', border: '1px solid #ddd' }}>
         <h2>🤖 Local AI Assistant ($0.00 Server Costs)</h2>
         <p><strong>Status:</strong> <span style={{ color: '#0056b3' }}>{aiStatus}</span></p>
@@ -144,7 +154,7 @@ export default function App() {
         )}
       </section>
 
-      {/* SECTION 2: KNOWLEDGE BASE SEARCH */}
+      {/* SECTION 2: STATIC MEDICAL KNOWLEDGE DATA-LAYER */}
       <section style={{ marginBottom: '40px' }}>
         <h2>🔍 Deterministic Drug Verification</h2>
         <input
@@ -172,7 +182,7 @@ export default function App() {
         )}
       </section>
 
-      {/* SECTION 3: LOCAL INVENTORY */}
+      {/* SECTION 3: VOLATILE LOCALSTORAGE INVENTORY MATRIX */}
       <section>
         <h2>📦 Local Inventory Management ($0.00 Database)</h2>
         
