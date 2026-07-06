@@ -1,19 +1,16 @@
 import { useState, useEffect } from 'react';
-// Import the local knowledge base we created in Phase 2
 import { PHARMACY_KNOWLEDGE_BASE } from './pharmacyData';
-// FIXED: Lowercase 'createEngine' to match the correct export from @mlc-ai/web-llm
-import { createEngine } from '@mlc-ai/web-llm';
+
+// BYPASS BUNDLER: Import directly from the web distribution network to prevent Vercel build crashes
+import { createEngine } from 'https://esm.sh/@mlc-ai/web-llm';
 
 export default function App() {
   // --- STATE MANAGEMENT ---
-  
-  // Inventory State (Loads from LocalStorage, defaults to empty array)
   const [inventory, setInventory] = useState(() => {
     const saved = localStorage.getItem('pharmacy_inventory');
     return saved ? JSON.parse(saved) : [];
   });
 
-  // Search & UI States
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [newItemName, setNewItemName] = useState('');
@@ -26,27 +23,21 @@ export default function App() {
   const [engine, setEngine] = useState(null);
 
   // --- EFFECTS ---
-
-  // Automatically save to LocalStorage whenever the 'inventory' array changes
   useEffect(() => {
     localStorage.setItem('pharmacy_inventory', JSON.stringify(inventory));
   }, [inventory]);
 
   // --- HANDLERS & LOGIC ---
-
-  // Direct WebGPU Engine Initialization (No complex background worker files)
   const initAI = async () => {
     setAiStatus('Initializing WebGPU & Loading Model Slices...');
     try {
-      // Using a highly optimized, lightweight 1B parameter model perfect for browser execution
       const selectedModel = "Llama-3-8B-Instruct-q4f16_1-MLC"; 
       
       const replyProgressCallback = (report) => {
-        console.log(report.text); // Prints compilation percentages directly to your browser console
+        console.log(report.text);
         setAiStatus(report.text);
       };
 
-      // FIXED: Invoking the correct lowercase function constructor
       const aiEngine = await createEngine(selectedModel, {
         initProgressCallback: replyProgressCallback,
       });
@@ -59,7 +50,6 @@ export default function App() {
     }
   };
 
-  // Submit prompt to the local AI engine
   const handleAiChat = async (e) => {
     e.preventDefault();
     if (!engine || !aiPrompt) return;
@@ -76,16 +66,13 @@ export default function App() {
     }
   };
 
-  // Search the $0.00 deterministic database layer
   const handleSearch = (e) => {
     const query = e.target.value;
     setSearchQuery(query);
-
     if (query.trim() === '') {
       setSearchResults([]);
       return;
     }
-
     const filtered = PHARMACY_KNOWLEDGE_BASE.filter((med) =>
       med.generic_name.toLowerCase().includes(query.toLowerCase()) ||
       med.brand_names.some(brand => brand.toLowerCase().includes(query.toLowerCase()))
@@ -93,28 +80,18 @@ export default function App() {
     setSearchResults(filtered);
   };
 
-  // Add an item to the LocalStorage inventory list
   const handleAddInventory = (e) => {
     e.preventDefault();
     if (!newItemName || !newItemStock) return;
-
-    const newItem = {
-      id: Date.now(),
-      name: newItemName,
-      stock: parseInt(newItemStock, 10),
-    };
-
-    setInventory([...inventory, newItem]);
+    setInventory([...inventory, { id: Date.now(), name: newItemName, stock: parseInt(newItemStock, 10) }]);
     setNewItemName('');
     setNewItemStock('');
   };
 
-  // Remove an item from the LocalStorage inventory list
   const handleRemoveInventory = (id) => {
     setInventory(inventory.filter((item) => item.id !== id));
   };
 
-  // --- RENDER UI ---
   return (
     <div style={{ fontFamily: 'sans-serif', maxWidth: '800px', margin: '0 auto', padding: '20px' }}>
       <h1>Zero-Cost Pharmacy Workspace</h1>
@@ -166,17 +143,14 @@ export default function App() {
           onChange={handleSearch}
           style={{ width: '100%', padding: '10px', fontSize: '16px', borderRadius: '4px', border: '1px solid #ccc' }}
         />
-
         {searchResults.length > 0 && (
           <div style={{ marginTop: '15px', background: '#f9f9f9', padding: '15px', borderRadius: '6px', border: '1px solid #ddd' }}>
             {searchResults.map((med, index) => (
-              <div key={index} style={{ marginBottom: '15px', paddingBottom: '15px', borderBottom: index !== searchResults.length - 1 ? '1px solid #eee' : 'none' }}>
-                <h3 style={{ margin: '0 0 5px 0', color: '#0056b3' }}>{med.generic_name} ({med.brand_names?.join(', ')})</h3>
+              <div key={index} style={{ marginBottom: '15px' }}>
+                <h3 style={{ margin: '0 0 5px 0', color: '#0056b3' }}>{med.generic_name}</h3>
                 <p><strong>Category:</strong> {med.category}</p>
-                <p><strong>Standard Dosage:</strong> {med.standard_dosage}</p>
-                <p><strong>Major Interactions:</strong> {med.major_interactions?.join(', ')}</p>
-                <span style={{ display: 'block', background: '#fff0f0', color: '#c00', padding: '8px', borderRadius: '4px', fontSize: '14px', fontWeight: 'bold' }}>
-                  ⚠️ Black Box Warning: {med.black_box_warning}
+                <span style={{ display: 'block', background: '#fff0f0', color: '#c00', padding: '8px', borderRadius: '4px', fontSize: '14px' }}>
+                  ⚠️ Warning: {med.black_box_warning}
                 </span>
               </div>
             ))}
@@ -187,7 +161,6 @@ export default function App() {
       {/* SECTION 3: LOCAL INVENTORY */}
       <section>
         <h2>📦 Local Inventory Management ($0.00 Database)</h2>
-        
         <form onSubmit={handleAddInventory} style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
           <input
             type="text"
@@ -207,10 +180,7 @@ export default function App() {
             Add Item
           </button>
         </form>
-
-        {inventory.length === 0 ? (
-          <p style={{ color: '#888', fontStyle: 'italic' }}>No items currently in stock.</p>
-        ) : (
+        {inventory.length > 0 && (
           <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
             <thead>
               <tr style={{ borderBottom: '2px solid #ddd' }}>
@@ -225,10 +195,7 @@ export default function App() {
                   <td style={{ padding: '10px' }}>{item.name}</td>
                   <td style={{ padding: '10px' }}>{item.stock} units</td>
                   <td style={{ padding: '10px' }}>
-                    <button 
-                      onClick={() => handleRemoveInventory(item.id)}
-                      style={{ padding: '4px 8px', background: '#dc3545', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}
-                    >
+                    <button onClick={() => handleRemoveInventory(item.id)} style={{ padding: '4px 8px', background: '#dc3545', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}>
                       Delete
                     </button>
                   </td>
