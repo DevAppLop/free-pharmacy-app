@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { PHARMACY_KNOWLEDGE_BASE } from './pharmacyData';
-// FIXED: Using the exact official exported factory function name
+// Official factory function from @mlc-ai/web-llm
 import { CreateMLCEngine } from '@mlc-ai/web-llm';
 
 export default function App() {
@@ -30,15 +30,15 @@ export default function App() {
   const initAI = async () => {
     setAiStatus('Initializing WebGPU & Loading Model Slices...');
     try {
-      // Using a lightweight, fast 1B model optimized for web browsers
-      const selectedModel = "Llama-3-8B-Instruct-q4f16_1-MLC"; 
+      // SWAPPED: Downgrading from 8B to the highly efficient 1B parameter variant 
+      // This solves the DXGI_ERROR_DEVICE_HUNG memory limits on your GPU core.
+      const selectedModel = "Llama-3-1B-Instruct-q4f16_1-MLC"; 
       
       const replyProgressCallback = (report) => {
         console.log(report.text);
         setAiStatus(report.text);
       };
 
-      // FIXED: Invoking the correct uppercase method
       const aiEngine = await CreateMLCEngine(selectedModel, {
         initProgressCallback: replyProgressCallback,
       });
