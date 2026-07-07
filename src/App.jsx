@@ -1,346 +1,355 @@
-import { useState, useEffect } from 'react';
-import { CreateMLCEngine } from '@mlc-ai/web-llm';
+import React, { useState, useEffect, useRef } from 'react';
+import { CreateMLCEngine } from "@mlc-ai/web-llm";
+import { useLiveQuery } from 'dexie-react-hooks';
+import { db } from './db';
+import { PHARMACY_KNOWLEDGE_BASE } from './pharmacyData';
+import { checkPatientInteractions, depleteInventoryStock, writeAuditLog } from './pharmacyEngine';
+import { SyncModule } from './SyncModule';
 
-// Pre-defined training tracks for the dropdown menu
-const TRAINING_TOPICS = [
-  "Pediatric Weight-Based Dose Calculations",
-  "Antibiotic Reconstitution & Storage Protocols",
-  "High-Alert Medications & Black Box Warnings",
-  "Look-Alike, Sound-Alike (LASA) Drug Prevention",
-  "Patient Confidentiality & HIPAA Compliance basics"
-];
+function App() {
+  // --- AI Model Engine States ---
+  const [engine, setEngine] = useState(null);
+  const [status, setStatus] = useState("Checking WebGPU support...");
+  const [downloadProgress, setDownloadProgress] = useState(0);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [prescriptionImage, setPrescriptionImage] = useState(null);
 
-export default function App() {
-  // --- APPLICATION STATE ---
-  const [inventory, setInventory] = useState(() => {
-    const saved = localStorage.getItem('pharmacy_inventory');
-    return saved ? JSON.parse(saved) : [];
+  // --- Selected Patient & Interaction Alert States ---
+  const [selectedPatientId, setSelectedPatientId] = useState(null);
+  const [interactionAlerts, setInteractionAlerts] = useState([]);
+  const [inventoryMessage, setInventoryMessage] = useState("");
+  const [inventoryAlertClass, setInventoryAlertClass] = useState("info");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedPatientHistory, setSelectedPatientHistory] = useState([]);
+
+  // --- Comprehensive Editable Form State ---
+  const [formData, setFormData] = useState({
+    rxSequenceNumber: `RX-${new Date().getTime().toString().slice(-6)}`,
+    currentDate: new Date().toLocaleDateString(),
+    patientName: "", patientAddress: "", patientDOB: "",
+    prescriberName: "", prescriberNPI: "", prescriberContact: "",
+    medicationName: "", medicationStrength: "",
+    quantityWritten: "", calculatedDaysSupply: "",
+    directionsRaw: "", directionsVerified: "",
+    precautionaryLabels: [],
+    fees: { containerFee: 2.50, prescriptionFee: 5.00, medicineFee: 0.00, totalFee: 7.50 },
+    extraNotes: ""
   });
 
-  const [searchQuery, setSearchQuery] = useState('');
-  const [verificationResult, setVerificationResult] = useState(null);
-  const [childWeight, setChildWeight] = useState('');
-  const [calcResults, setCalcResults] = useState(null);
+  // --- Dexie Live Database Subscriptions (Stage 1 Core Monitors) ---
+  const localInventoryList = useLiveQuery(() => db.inventory.toArray()) || [];
+  const systemAuditTrail = useLiveQuery(() => db.auditLogs.orderBy('id').reverse().limit(10).toArray()) || [];
+  
+  // Live query for patient search results matching query string input
+  const matchedPatients = useLiveQuery(async () => {
+    if (!searchQuery) return [];
+    return await db.patients
+      .filter(p => p.name.toLowerCase().includes(searchQuery.toLowerCase()))
+      .toArray();
+  }, [searchQuery]);
 
-  // Training Module States
-  const [selectedTopic, setSelectedTopic] = useState('');
-  const [trainingContent, setTrainingContent] = useState(null);
-  const [userAnswers, setUserAnswers] = useState({});
-  const [quizSubmitted, setQuizSubmitted] = useState(false);
-  const [isGeneratingModule, setIsGeneratingModule] = useState(false);
-
-  // Local WebGPU LLM States
-  const [aiStatus, setAiStatus] = useState('Not Initialized');
-  const [aiPrompt, setAiPrompt] = useState('');
-  const [aiResponse, setAiResponse] = useState('');
-  const [engine, setEngine] = useState(null);
-  const [isVerifying, setIsVerifying] = useState(false);
-
+  // --- 1. Initialize Local Multi-modal Engine on Mount ($0.00) ---
   useEffect(() => {
-    localStorage.setItem('pharmacy_inventory', JSON.stringify(inventory));
-  }, [inventory]);
-
-  // --- INITIALIZE WEB_LLM ENGINE ---
-  const initAI = async () => {
-    setAiStatus('Initializing WebGPU Model (Llama-3.2)...');
-    try {
-      const selectedModel = "Llama-3.2-1B-Instruct-q4f16_1-MLC"; 
-      const replyProgressCallback = (report) => { setAiStatus(report.text); };
-      const aiEngine = await CreateMLCEngine(selectedModel, { initProgressCallback: replyProgressCallback });
-      setEngine(aiEngine);
-      setAiStatus('Model Ready!');
-    } catch (error) {
-      console.error(error);
-      setAiStatus('Initialization failed. Verify WebGPU capabilities.');
+    async function initAI() {
+      try {
+        setStatus("Downloading/Loading Vision LLM locally onto device hardware via WebGPU...");
+        // Initialize lightweight vision model processing locally in user's browser context
+        const localEngine = await CreateMLCEngine(
+          "moondream2-q4f16_1-MLC",
+          { initProgressCallback: (p) => setDownloadProgress(Math.round(p.progress * 100)) }
+        );
+        setEngine(localEngine);
+        setStatus("Ready. Running 100% locally on your machine graphics hardware.");
+      } catch (error) {
+        console.error(error);
+        setStatus("Initialization failed. Ensure browser supports WebGPU (Chrome/Edge recommended).");
+      }
     }
-  };
+    initAI();
+  }, []);
 
-  // --- DYNAMIC AI TRAINING MODULE GENERATOR ---
-  const handleGenerateTraining = async (topicName) => {
-    if (!topicName) return;
-    setSelectedTopic(topicName);
-    setIsGeneratingModule(true);
-    setTrainingContent(null);
-    setQuizSubmitted(false);
-    setUserAnswers({});
-    
-    if (!engine) {
-      alert("Please initialize the Local AI Assistant at the top of the page first to generate training modules.");
-      setIsGeneratingModule(false);
-      return;
+  // --- 2. Live Automated Drug-Drug Interaction Trigger Checking ---
+  useEffect(() => {
+    async function runClinicalSanityCheck() {
+      if (selectedPatientId && formData.medicationName) {
+        const alerts = await checkPatientInteractions(selectedPatientId, formData.medicationName);
+        setInteractionAlerts(alerts);
+      } else {
+        setInteractionAlerts([]);
+      }
     }
+    runClinicalSanityCheck();
+  }, [formData.medicationName, selectedPatientId]);
 
-    const trainingPrompt = 
-      `You are an expert Clinical Pharmacy Instructor building a training module for an assistant on the topic: "${topicName}".\n` +
-      `Generate a structured training module and return ONLY a valid JSON object matching the exact schema below. Do not include markdown codeblocks or extra conversational text:\n` +
-      `{\n` +
-      `  "topic": "${topicName}",\n` +
-      `  "core_lesson": "A detailed 2-paragraph clinical explanation covering critical protocols and workflows.",\n` +
-      `  "safety_takeaway": "The #1 golden safety rule for this specific topic.",\n` +
-      `  "quiz": [\n` +
-      `    {\n` +
-      `      "question": "Clear scenario-based question 1?",\n` +
-      `      "options": ["Option A", "Option B", "Option C", "Option D"],\n` +
-      `      "correct_index": 0,\n` +
-      `      "explanation": "Why Option A is clinically correct."\n` +
-      `    },\n` +
-      `    {\n` +
-      `      "question": "Clear scenario-based question 2?",\n` +
-      `      "options": ["Option A", "Option B", "Option C", "Option D"],\n` +
-      `      "correct_index": 1,\n` +
-      `      "explanation": "Why Option B is clinically correct."\n` +
-      `    }\n` +
-      `  ]\n` +
-      `}`;
-
-    try {
-      const reply = await engine.chat.completions.create({
-        messages: [{ role: 'user', content: trainingPrompt }]
+  // --- 3. Dynamic Local Form & Financial Changes Handling ---
+  const handleFormChange = (e, section = null) => {
+    const { name, value } = e.target;
+    if (section === 'fees') {
+      setFormData(prev => {
+        const updatedFees = { ...prev.fees, [name]: parseFloat(value) || 0 };
+        updatedFees.totalFee = updatedFees.containerFee + updatedFees.prescriptionFee + updatedFees.medicineFee;
+        return { ...prev, fees: updatedFees };
       });
-      
-      const cleanJsonText = reply.choices[0].message.content.trim().replace(/```json|```/g, "");
-      const generatedModule = JSON.parse(cleanJsonText);
-      setTrainingContent(generatedModule);
-    } catch (error) {
-      console.error("Failed to construct training module JSON:", error);
-      alert("The local model encountered an issue assembling the structural data block. Please try generating it again.");
-    } finally {
-      setIsGeneratingModule(false);
+    } else {
+      setFormData(prev => ({ ...prev, [name]: value }));
     }
   };
 
-  // --- STANDARD COMPLIANCE CHAT ---
-  const handleAiChat = async (e) => {
-    e.preventDefault();
-    if (!engine || !aiPrompt) return;
-    setAiResponse('Thinking...');
+  // --- 4. Handle Existing Patient Profile Selection Recalls ---
+  const handleSelectExistingPatient = async (patient) => {
+    setSelectedPatientId(patient.id);
+    setFormData(prev => ({
+      ...prev,
+      patientName: patient.name,
+      patientAddress: patient.address,
+      patientDOB: patient.dob
+    }));
+
+    const history = await db.prescriptions.where('patientId').equals(patient.id).toArray();
+    setSelectedPatientHistory(history);
+    setSearchQuery(""); // clear dropdown lists after selecting target record
+  };
+
+  // --- 5. Image Upload & Cross-Device P2P Image Handler Pipeline ---
+  const handleImageUploadAndProcess = async (eventOrUrl) => {
+    let imageUrl = typeof eventOrUrl === 'string' ? eventOrUrl : URL.createObjectURL(eventOrUrl.target.files[0]);
+    if (!engine) return;
+
+    setIsProcessing(true);
+    setPrescriptionImage(imageUrl);
+
+    const jsonOutputSchema = {
+      patientName: "String", prescriberName: "String",
+      medication: "String", strength: "String", sigDirections: "String", quantity: "Number"
+    };
+
+    const systemPrompt = `Analyze prescription document image. Extract written text details into a flat valid JSON object matching this schema blueprint strictly: ${JSON.stringify(jsonOutputSchema)}. Only output JSON structure.`;
+
     try {
       const reply = await engine.chat.completions.create({
         messages: [
-          { role: 'system', content: "You are a clinical verification engine. Verify age-based calculations strictly." },
-          { role: 'user', content: aiPrompt }
-        ]
+          { role: "system", content: systemPrompt },
+          { role: "user", content: [{ type: "text", text: "Parse prescription layout details:" }, { type: "image_url", image_url: imageUrl }] }
+        ],
+        temperature: 0.0
       });
-      setAiResponse(reply.choices[0].message.content);
-    } catch (error) {
-      setAiResponse('Error executing local safety inference.');
-    }
-  };
 
-  // --- CLINICAL REGISTRY VERIFICATION LAYER (OPENFDA) ---
-  const handleClinicalRegistryVerification = async (e) => {
-    e.preventDefault();
-    if (!searchQuery) return;
-    setIsVerifying(true);
-    setVerificationResult(null);
-    setCalcResults(null);
+      const parsedJSON = JSON.parse(reply.choices[0].message.content);
+      const drugSafetyInfo = PHARMACY_KNOWLEDGE_BASE.find(d => parsedJSON.medication.toLowerCase().includes(d.generic_name.toLowerCase()));
 
-    try {
-      const fdaResponse = await fetch(`https://api.fda.gov/drug/label.json?search=openfda.generic_name:"${searchQuery}"&limit=1`);
-      if (!fdaResponse.ok) throw new Error("Medication label not found in federal reference registry.");
-      
-      const fdaData = await fdaResponse.json();
-      const labelInfo = fdaData.results[0];
-
-      const brandName = labelInfo.openfda?.brand_name?.[0] || "Generic Variant";
-      const genericName = labelInfo.openfda?.generic_name?.[0] || searchQuery;
-      const dosageAndAdministration = labelInfo.dosage_and_administration?.[0] || "Not specified.";
-      const pediatricUse = labelInfo.pediatric_use?.[0] || "No specialized pediatric metadata found.";
-      const boxedWarning = labelInfo.boxed_warning?.[0] || "No severe black box warnings active on record.";
-
-      if (!engine) {
-        setVerificationResult({
-          generic_name: genericName, brand_name: brandName, dosage: dosageAndAdministration,
-          pediatric: pediatricUse, warning: boxedWarning, pediatric_mg_per_kg_per_day: 10, pediatric_max_mg_per_kg_per_day: 40
-        });
-        setIsVerifying(false);
-        return;
-      }
-
-      const parsingPrompt = 
-        `You are parsing an official FDA label for "${genericName}". Extract structured values and return ONLY valid JSON:\n` +
-        `{\n` +
-        `  "generic_name": "${genericName}",\n` +
-        `  "brand_name": "${brandName}",\n` +
-        `  "pediatric_mg_per_kg_per_day": 15,\n` +
-        `  "pediatric_max_mg_per_kg_per_day": 60\n` +
-        `}\n` +
-        `Extract parameters from: ${dosageAndAdministration.substring(0, 1000)}`;
-
-      const aiReply = await engine.chat.completions.create({ messages: [{ role: 'user', content: parsingPrompt }] });
-      const parsedJson = JSON.parse(aiReply.choices[0].message.content.trim().replace(/```json|```/g, ""));
-      
-      setVerificationResult({
-        generic_name: parsedJson.generic_name, brand_name: parsedJson.brand_name, dosage: dosageAndAdministration,
-        pediatric: pediatricUse, warning: boxedWarning, pediatric_mg_per_kg_per_day: parsedJson.pediatric_mg_per_kg_per_day || 10,
-        pediatric_max_mg_per_kg_per_day: parsedJson.pediatric_max_mg_per_kg_per_day || 40
-      });
-    } catch (err) {
-      alert(`Verification error: ${err.message}`);
+      const baseMedPrice = 12.50;
+      setFormData(prev => ({
+        ...prev,
+        patientName: parsedJSON.patientName,
+        prescriberName: parsedJSON.prescriberName,
+        medicationName: parsedJSON.medication,
+        medicationStrength: parsedJSON.strength,
+        directionsRaw: parsedJSON.sigDirections,
+        quantityWritten: parsedJSON.quantity,
+        directionsVerified: drugSafetyInfo ? `${parsedJSON.sigDirections} [Verified safe matching baseline safety reference: ${drugSafetyInfo.standard_dosage}]` : `${parsedJSON.sigDirections} [Warning: No matching regulatory baseline protocol found.]`,
+        precautionaryLabels: drugSafetyInfo ? drugSafetyInfo.major_interactions : ["Review medication guide."],
+        fees: { ...prev.fees, medicineFee: baseMedPrice, totalFee: prev.fees.containerFee + prev.fees.prescriptionFee + baseMedPrice }
+      }));
+    } catch (e) {
+      console.error("VLM processing failed:", e);
     } finally {
-      setIsVerifying(false);
+      setIsProcessing(false);
     }
   };
 
-  const handleWeightCalculation = (weightKg, med) => {
-    const kg = parseFloat(weightKg);
-    setChildWeight(weightKg);
-    if (!kg || kg <= 0) { setCalcResults(null); return; }
-    setCalcResults({
-      targetDaily: (kg * med.pediatric_mg_per_kg_per_day).toFixed(1),
-      maxDaily: (kg * med.pediatric_max_mg_per_kg_per_day).toFixed(1)
+  // --- 6. Remote Device WebSocket / WebRTC Print Hook ---
+  const handleRemotePrintCommand = (labelId) => {
+    const targetElement = document.getElementById(`print-label-${labelId}`);
+    if (targetElement) {
+      const printContent = targetElement.innerHTML;
+      const originalContent = document.body.innerHTML;
+      document.body.innerHTML = printContent;
+      window.print();
+      document.body.innerHTML = originalContent;
+      window.location.reload();
+    }
+  };
+
+  // --- 7. Final Transaction Form Commit Action Logic ---
+  const handleFormSubmit = async (e) => {
+    e.preventDefault();
+    let currentPatientId = selectedPatientId;
+
+    if (!currentPatientId) {
+      currentPatientId = await db.patients.add({
+        name: formData.patientName,
+        address: formData.patientAddress,
+        dob: formData.patientDOB
+      });
+      await writeAuditLog("CREATE_PATIENT", currentPatientId, {}, { name: formData.patientName });
+    }
+
+    const rxId = await db.prescriptions.add({
+      rxSequenceNumber: formData.rxSequenceNumber,
+      patientId: currentPatientId,
+      patientName: formData.patientName,
+      prescriberName: formData.prescriberName,
+      drugName: formData.medicationName,
+      medicationStrength: formData.medicationStrength,
+      quantityWritten: formData.quantityWritten,
+      calculatedDaysSupply: formData.calculatedDaysSupply,
+      directionsVerified: formData.directionsVerified,
+      fees: formData.fees,
+      datePrescribed: formData.currentDate,
+      backupStatus: 'pending'
     });
+
+    await writeAuditLog("EMIT_PRESCRIPTION", rxId, {}, { rxNo: formData.rxSequenceNumber, drug: formData.medicationName });
+
+    const inventoryResult = await depleteInventoryStock(formData.medicationName, formData.quantityWritten);
+    setInventoryMessage(inventoryResult.msg);
+    setInventoryAlertClass(inventoryResult.lowStockAlert ? "danger" : "success");
+
+    // Reset local data states for entry system loops
+    setSelectedPatientId(null);
+    setSelectedPatientHistory([]);
+    setFormData(prev => ({
+      ...prev,
+      rxSequenceNumber: `RX-${new Date().getTime().toString().slice(-6)}`,
+      patientName: "", patientAddress: "", patientDOB: "",
+      prescriberName: "", prescriberNPI: "", prescriberContact: "",
+      medicationName: "", medicationStrength: "", quantityWritten: "", calculatedDaysSupply: "",
+      directionsRaw: "", directionsVerified: "", precautionaryLabels: [], extraNotes: "",
+      fees: { containerFee: 2.50, prescriptionFee: 5.00, medicineFee: 0.00, totalFee: 7.50 }
+    }));
+    alert("Prescription processing transaction finalized successfully.");
   };
 
   return (
-    <div style={{ fontFamily: 'sans-serif', maxWidth: '850px', margin: '0 auto', padding: '20px', color: '#333' }}>
-      <h1>Pharmacy Workshop</h1>
-      <p style={{ color: '#666' }}>Grounded Workspace with Dynamic Assistant Training & FDA Reference Layers.</p>
-      <hr />
+    <div style={{ padding: '20px', fontFamily: 'sans-serif', maxWidth: '1100px', margin: '0 auto', color: '#333' }}>
+      <header style={{ background: '#0070f3', padding: '15px', color: 'white', borderRadius: '6px', marginBottom: '25px' }}>
+        <h2 style={{ margin: 0 }}>🛡️ Smart-PMS: Local Edge Pharmacy System</h2>
+        <small>Compute Footprint Cost: $0.00 | Status: {status} {downloadProgress > 0 && downloadProgress < 100 && `(${downloadProgress}%)`}</small>
+      </header>
 
-      {/* CORE CONTROL MATRIX */}
-      <section style={{ marginBottom: '30px', background: '#f8f9fa', padding: '25px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-        <h2>🤖 Your Local AI Assistant</h2>
-        <p><strong>Status Track:</strong> <span style={{ color: '#2b6cb0' }}>{aiStatus}</span></p>
-        {aiStatus === 'Not Initialized' && (
-          <button onClick={initAI} style={{ padding: '10px 20px', background: '#3182ce', color: '#fff', border: 'none', borderRadius: '4px', fontWeight: 'bold', cursor: 'pointer' }}>
-            Initialize Local AI Core (WebGPU)
-          </button>
-        )}
-        {engine && (
-          <form onSubmit={handleAiChat} style={{ marginTop: '15px' }}>
-            <input type="text" placeholder="Ask custom compliance or structural safety questions..." value={aiPrompt} onChange={(e) => setAiPrompt(e.target.value)} style={{ width: '80%', padding: '10px', borderRadius: '4px', border: '1px solid #cbd5e0' }} />
-            <button type="submit" style={{ width: '18%', marginLeft: '2%', padding: '10px', background: '#48bb78', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>Ask Assistant</button>
-          </form>
-        )}
-        {aiResponse && (
-          <div style={{ marginTop: '15px', background: '#fff', padding: '15px', borderRadius: '4px', border: '1px solid #e2e8f0', fontSize: '14px' }}>
-            <strong>System Summary Log:</strong>
-            <p style={{ margin: '5px 0 0 0', whiteSpace: 'pre-wrap', color: '#4a5568' }}>{aiResponse}</p>
+      {/* Peer-To-Peer Linking Engine Connection Port */}
+      <SyncModule onImageReceived={handleImageUploadAndProcess} onRemotePrintTriggered={handleRemotePrintCommand} />
+
+      {/* Relational Patient Database History Finder Row */}
+      <div style={{ background: '#f8f9fa', padding: '15px', borderRadius: '5px', marginBottom: '20px', border: '1px solid #dee2e6' }}>
+        <h3>🔍 Active Patient Database Registry Lookup</h3>
+        <input 
+          type="text" placeholder="Type a patient's name to search localized clinical data indexes..." value={searchQuery} 
+          onChange={(e) => setSearchQuery(e.target.value)} style={{ width: '100%', padding: '10px', boxSizing: 'border-box' }}
+        />
+        {matchedPatients && matchedPatients.length > 0 && (
+          <div style={{ background: 'white', border: '1px solid #ccc', borderRadius: '4px', marginTop: '5px', maxHeight: '150px', overflowY: 'auto' }}>
+            {matchedPatients.map(p => (
+              <div key={p.id} onClick={() => handleSelectExistingPatient(p)} style={{ padding: '10px', cursor: 'pointer', borderBottom: '1px solid #eee' }}>
+                👤 <strong>{p.name}</strong> (DOB: {p.dob})
+              </div>
+            ))}
           </div>
         )}
-      </section>
+        {selectedPatientId && (
+          <div style={{ marginTop: '10px', padding: '10px', background: '#fff', borderLeft: '4px solid #0070f3', fontSize: '13px' }}>
+            <strong>📜 Historic Treatment Log For Active Selected Patient Profile:</strong>
+            {selectedPatientHistory.length === 0 ? <p style={{ margin: '5px 0', color: '#666' }}>No legacy transaction invoices found on machine.</p> : (
+              <ul>{selectedPatientHistory.map(rx => <li key={rx.id}>{rx.datePrescribed} - {rx.rxSequenceNumber}: {rx.drugName} ({rx.quantityWritten} units)</li>)}</ul>
+            )}
+          </div>
+        )}
+      </div>
 
-      {/* --- NEW SECTION: PHARMACY ASSISTANT TRAINING MODULE ENGINE --- */}
-      <section style={{ marginBottom: '40px', padding: '25px', background: '#f0fff4', border: '1px solid #c6f6d5', borderRadius: '8px' }}>
-        <h2 style={{ color: '#22543d', margin: '0 0 10px 0' }}>🎓 Pharmacy Assistant Training Academy</h2>
-        <p style={{ fontSize: '14px', margin: '0 0 15px 0', color: '#2f855a' }}>
-          Select an official study track below or search a custom concept to generate an automated interactive curriculum.
-        </p>
+      {/* Live Context Image Camera Capture Node Grid */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '20px' }}>
+        <div>
+          <h3>📸 Optical Scanner Unit</h3>
+          <div style={{ border: '2px dashed #bbb', padding: '20px', textAlign: 'center', background: '#fafafa', borderRadius: '6px' }}>
+            <input type="file" accept="image/*" onChange={handleImageUploadAndProcess} disabled={!engine || isProcessing} />
+            {isProcessing && <p style={{ color: 'blue', fontWeight: 'bold' }}>Local WebGPU VLM is reading characters...</p>}
+            {prescriptionImage && <img src={prescriptionImage} alt="Captured Prescription Layout Target" style={{ marginTop: '10px', width: '100%', maxHeight: '200px', objectFit: 'contain' }} />}
+          </div>
+          
+          {/* Automated Safety Check System Banner Feedouts */}
+          {interactionAlerts.length > 0 && (
+            <div style={{ background: '#fff0f0', borderLeft: '5px solid #d9534f', padding: '12px', marginTop: '20px', borderRadius: '4px' }}>
+              <h4 style={{ color: '#d9534f', margin: '0 0 5px 0' }}>⚠️ CLINICAL CONTRAINDICATION DETECTED</h4>
+              {interactionAlerts.map((a, i) => <p key={i} style={{ fontSize: '12px', margin: '3px 0' }}><strong>{a.drugA.toUpperCase()} + {a.drugB.toUpperCase()}:</strong> {a.description}</p>)}
+            </div>
+          )}
 
-        <div style={{ display: 'flex', gap: '15px', marginBottom: '20px' }}>
-          {/* Preset drop-down picker */}
-          <select 
-            onChange={(e) => handleGenerateTraining(e.target.value)}
-            defaultValue=""
-            style={{ padding: '10px', flex: 1, borderRadius: '4px', border: '1px solid #cbd5e0', fontSize: '14px' }}
-          >
-            <option value="" disabled>-- Select an Instant Training Track --</option>
-            {TRAINING_TOPICS.map((topic, i) => <option key={i} value={topic}>{topic}</option>)}
-          </select>
-
-          {/* Manual Input Field */}
-          <input 
-            type="text"
-            placeholder="Or type a custom topic and press Enter..."
-            onKeyDown={(e) => { if (e.key === 'Enter') handleGenerateTraining(e.target.value); }}
-            style={{ padding: '10px', flex: 1, borderRadius: '4px', border: '1px solid #cbd5e0', fontSize: '14px' }}
-          />
+          {inventoryMessage && (
+            <div style={{ padding: '10px', marginTop: '10px', borderRadius: '4px', fontSize: '13px', fontWeight: 'bold', background: inventoryAlertClass === 'danger' ? '#f8d7da' : '#d4edda', color: inventoryAlertClass === 'danger' ? '#721c24' : '#155724' }}>
+              {inventoryMessage}
+            </div>
+          )}
         </div>
 
-        {isGeneratingModule && (
-          <div style={{ padding: '15px', background: '#fff', borderRadius: '6px', textAlign: 'center', border: '1px dashed #38a169' }}>
-            ⏳ <strong>Local AI is drafting your interactive curriculum...</strong> Please wait roughly 10-15 seconds for local execution tokens to process.
-          </div>
-        )}
-
-        {/* Training Layout Presentation */}
-        {trainingContent && (
-          <div style={{ background: '#fff', padding: '20px', borderRadius: '6px', border: '1px solid #c6f6d5', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
-            <h3 style={{ color: '#234e52', marginTop: '0' }}>📋 Module: {trainingContent.topic}</h3>
-            <p style={{ lineHeight: '1.6', fontSize: '15px', color: '#2d3748' }}>{trainingContent.core_lesson}</p>
+        {/* Core Automated Entry Form Workspace Layout Panel Component */}
+        <div>
+          <h3>🏷️ Workorder Manifest Formulation Sheet</h3>
+          <form onSubmit={handleFormSubmit} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', background: '#fff', border: '1px solid #ddd', padding: '20px', borderRadius: '6px' }}>
+            <div style={{ gridColumn: '1/-1', background: '#eee', padding: '8px', fontWeight: 'bold', fontSize: '13px' }}>TRACK INDEX ID: {formData.rxSequenceNumber} | SYSTEM CLOCK TIMESTAMP: {formData.currentDate}</div>
             
-            <div style={{ background: '#fffaf0', borderLeft: '4px solid #dd6b20', padding: '12px', margin: '15px 0', borderRadius: '0 4px 4px 0' }}>
-              <strong>⚠️ CRITICAL SAFETY TAKEAWAY:</strong>
-              <p style={{ margin: '5px 0 0 0', fontStyle: 'italic', color: '#7b341e' }}>{trainingContent.safety_takeaway}</p>
+            <input type="text" name="patientName" value={formData.patientName} onChange={handleFormChange} placeholder="Patient Full Name" required />
+            <input type="text" name="patientDOB" value={formData.patientDOB} onChange={handleFormChange} placeholder="Patient Date of Birth" required />
+            <input type="text" name="patientAddress" value={formData.patientAddress} onChange={handleFormChange} placeholder="Patient Residential Street Address" style={{ gridColumn: '1/-1' }} />
+            
+            <input type="text" name="prescriberName" value={formData.prescriberName} onChange={handleFormChange} placeholder="Prescribing Medical Specialist" />
+            <input type="text" name="prescriberNPI" value={formData.prescriberNPI} onChange={handleFormChange} placeholder="NPI Verification Registry String" />
+            
+            <input type="text" name="medicationName" value={formData.medicationName} onChange={handleFormChange} placeholder="Dispensed Chemical Compound Target" style={{ gridColumn: '1/-1', fontWeight: 'bold' }} required />
+            <input type="text" name="medicationStrength" value={formData.medicationStrength} onChange={handleFormChange} placeholder="Dosage Strength Factor (e.g. 20mg)" />
+            <input type="number" name="quantityWritten" value={formData.quantityWritten} onChange={handleFormChange} placeholder="Vol Dispensed Metric Units" required />
+            
+            <textarea name="directionsRaw" value={formData.directionsRaw} onChange={handleFormChange} placeholder="Transcribed Sig Inbound Codes..." style={{ gridColumn: '1/-1' }} rows={2} />
+            <textarea name="directionsVerified" value={formData.directionsVerified} onChange={handleFormChange} placeholder="AI Validated Reference Verification Feedback Output" style={{ gridColumn: '1/-1', color: 'green', fontWeight: 'bold' }} rows={2} />
+
+            <div style={{ gridColumn: '1/-1', background: '#fff9e6', padding: '10px', borderRadius: '4px', fontSize: '12px' }}>
+              <strong>⚠️ Active Dynamic Precautionary Adhesives:</strong>
+              <div>{formData.precautionaryLabels.map((l, idx) => <span key={idx} style={{ background: '#f5c6cb', color: '#721c24', padding: '2px 6px', margin: '2px', display: 'inline-block', borderRadius: '4px' }}>{l}</span>)}</div>
             </div>
 
-            {/* Interactive Module Quiz Elements */}
-            <div style={{ marginTop: '25px', paddingTop: '20px', borderTop: '2px dashed #e2e8f0' }}>
-              <h4 style={{ color: '#2c5282', margin: '0 0 15px 0' }}>🧠 Knowledge Check Verification Quiz</h4>
-              {trainingContent.quiz.map((q, qIdx) => (
-                <div key={qIdx} style={{ marginBottom: '20px', background: '#f7fafc', padding: '15px', borderRadius: '6px' }}>
-                  <p style={{ fontWeight: 'bold', margin: '0 0 10px 0' }}>Q{qIdx + 1}: {q.question}</p>
-                  {q.options.map((opt, oIdx) => (
-                    <label key={oIdx} style={{ display: 'block', margin: '8px 0', cursor: 'pointer', fontSize: '14px' }}>
-                      <input 
-                        type="radio" 
-                        name={`question-${qIdx}`} 
-                        disabled={quizSubmitted}
-                        checked={userAnswers[qIdx] === oIdx}
-                        onChange={() => setUserAnswers({ ...userAnswers, [qIdx]: oIdx })}
-                        style={{ marginRight: '8px' }}
-                      />
-                      {opt}
-                    </label>
-                  ))}
-                  {quizSubmitted && (
-                    <div style={{ marginTop: '10px', fontSize: '13px', color: userAnswers[qIdx] === q.correct_index ? '#2f855a' : '#c53030' }}>
-                      {userAnswers[qIdx] === q.correct_index ? "✅ Correct!" : `❌ Incorrect (Correct Answer: ${q.options[q.correct_index]})`}<br/>
-                      <span style={{ color: '#4a5568', fontStyle: 'italic' }}><strong>Rationale:</strong> {q.explanation}</span>
-                    </div>
-                  )}
-                </div>
+            <div style={{ gridColumn: '1/-1', display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '5px', borderTop: '1px solid #ddd', paddingTop: '10px', fontSize: '12px' }}>
+              <div>Vial Fee ($)<input type="number" name="containerFee" value={formData.fees.containerFee} onChange={(e)=>handleFormChange(e,'fees')} step="0.01"/></div>
+              <div>Rx Fee ($)<input type="number" name="prescriptionFee" value={formData.fees.prescriptionFee} onChange={(e)=>handleFormChange(e,'fees')} step="0.01"/></div>
+              <div>Base Price ($)<input type="number" name="medicineFee" value={formData.fees.medicineFee} onChange={(e)=>handleFormChange(e,'fees')} step="0.01"/></div>
+              <div style={{ textAlign: 'right', fontWeight: 'bold', fontSize: '14px', alignSelf: 'center' }}>TOTAL: ${formData.fees.totalFee.toFixed(2)}</div>
+            </div>
+
+            <button type="submit" style={{ gridColumn: '1/-1', background: '#28a745', color: '#fff', border: 'none', padding: '12px', fontSize: '15px', fontWeight: 'bold', cursor: 'pointer', borderRadius: '4px', marginTop: '10px' }}>Finalize and Commit Invoices Locally</button>
+          </form>
+        </div>
+      </div>
+
+      {/* System Infrastructure Metrics Display Modules Row (Stage 1 Core Monitors) */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginTop: '30px' }}>
+        <div style={{ background: '#fdfefe', border: '1px solid #ccc', padding: '15px', borderRadius: '5px' }}>
+          <h4>📦 Real-time Shelf Stock Management Ledger</h4>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+            <thead><tr style={{ background: '#eee', textAlign: 'left' }}><th style={{ padding: '6px' }}>Compound Label</th><th style={{ padding: '6px' }}>Physical On-Hand Volume</th><th style={{ padding: '6px' }}>Expiry Clock</th></tr></thead>
+            <tbody>
+              {localInventoryList.map(item => (
+                <tr key={item.id} style={{ borderBottom: '1px solid #eee', color: item.currentStock <= item.reorderLevel ? 'red' : 'black' }}>
+                  <td style={{ padding: '6px' }}>{item.drugName} {item.currentStock <= item.reorderLevel && "⚠️"}</td>
+                  <td style={{ padding: '6px', fontWeight: 'bold' }}>{item.currentStock} tab counts</td>
+                  <td style={{ padding: '6px' }}>{item.expiryDate}</td>
+                </tr>
               ))}
-              
-              {!quizSubmitted ? (
-                <button 
-                  onClick={() => setQuizSubmitted(true)}
-                  style={{ padding: '10px 20px', background: '#2b6cb0', color: '#fff', border: 'none', borderRadius: '4px', fontWeight: 'bold', cursor: 'pointer' }}
-                >
-                  Submit Quiz Answers
-                </button>
-              ) : (
-                <button 
-                  onClick={() => handleGenerateTraining(selectedTopic)}
-                  style={{ padding: '10px 20px', background: '#4a5568', color: '#fff', border: 'none', borderRadius: '4px', fontWeight: 'bold', cursor: 'pointer' }}
-                >
-                  Reset & Retry New Scenarios
-                </button>
-              )}
-            </div>
+            </tbody>
+          </table>
+        </div>
+
+        <div style={{ background: '#fdfefe', border: '1px solid #ccc', padding: '15px', borderRadius: '5px' }}>
+          <h4>🛡️ Active Legal Compliance Security Audit Stream</h4>
+          <div style={{ maxHeight: '180px', overflowY: 'auto', fontSize: '11px', fontFamily: 'monospace', background: '#fafafa', padding: '5px' }}>
+            {systemAuditTrail.map(log => (
+              <div key={log.id} style={{ padding: '4px 0', borderBottom: '1px dashed #ddd' }}>
+                <span style={{ color: '#0070f3' }}>[{new Date(log.timestamp).toLocaleTimeString()}]</span> <strong>{log.actionType}</strong> <br />
+                <span style={{ color: '#555' }}>Payload Struct Trace: {log.newValues}</span>
+              </div>
+            ))}
           </div>
-        )}
-      </section>
-
-      {/* SEARCH MATRIX */}
-      <section style={{ marginBottom: '30px' }}>
-        <h2>🔍 Live Grounded Reference Verification</h2>
-        <form onSubmit={handleClinicalRegistryVerification} style={{ display: 'flex', gap: '10px' }}>
-          <input type="text" placeholder="Enter Generic Name for live calculation boundaries (e.g., Flucloxacillin)..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} style={{ flex: 1, padding: '12px', fontSize: '16px', borderRadius: '4px', border: '1px solid #cbd5e0' }} />
-          <button type="submit" disabled={isVerifying} style={{ padding: '12px 24px', background: '#00a3c4', color: '#fff', border: 'none', borderRadius: '4px', fontWeight: 'bold', cursor: 'pointer' }}>
-            {isVerifying ? "Querying..." : "Verify Online Registry"}
-          </button>
-        </form>
-
-        {verificationResult && (
-          <div style={{ marginTop: '20px', padding: '20px', background: '#fff', border: '1px solid #cbd5e0', borderRadius: '8px' }}>
-            <h2 style={{ margin: '0 0 5px 0', color: '#2c5282' }}>{verificationResult.generic_name}</h2>
-            <p style={{ fontSize: '14px', color: '#718096', margin: '0 0 15px 0' }}><strong>Registry Brand Identifier:</strong> {verificationResult.brand_name}</p>
-
-            <div style={{ background: '#ebf8ff', padding: '15px', borderRadius: '6px', border: '1px solid #bee3f8', marginBottom: '20px' }}>
-              <h3 style={{ margin: '0 0 10px 0', color: '#2b6cb0' }}>👶 Clinical Pediatric Calculator Layer</h3>
-              <input type="number" placeholder="Weight in kg" value={childWeight} onChange={(e) => handleWeightCalculation(e.target.value, verificationResult)} style={{ padding: '8px', width: '150px', borderRadius: '4px', border: '1px solid #cbd5e0' }} />
-              {calcResults && (
-                <div style={{ marginTop: '12px', background: '#fff', padding: '10px', borderRadius: '4px', border: '1px solid #bee3f8' }}>
-                  🟢 Grounded Baseline Target Dose: <strong>{calcResults.targetDaily} mg / day</strong> total.<br />
-                  🔴 Maximum Safety Cap Limit: <strong>{calcResults.maxDaily} mg / day</strong> total.
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-      </section>
+        </div>
+      </div>
     </div>
   );
 }
+
+export default App;

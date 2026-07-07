@@ -11,6 +11,9 @@
   },
   "dependencies": {
     "@mlc-ai/web-llm": "^0.2.84",
+    "dexie-react-hooks": "^4.4.0",
+    "peerjs": "^1.5.5",
+    "qrcode.react": "^4.2.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   },
